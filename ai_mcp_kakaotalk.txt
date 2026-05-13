@@ -1,0 +1,1098 @@
+나에게 카토으로 카톡 보내면 ai가 수행해서 다시 답을 주는 mcp 를 활용하여 만들건데 mcp서버는 node js 기준으로 할거야
+
+구조는 이렇게 가면 된다.
+핵심은:
+
+카카오톡 메시지 → MCP Server(Node.js) → AI 실행 → 응답 생성 → 카카오톡으로 회신
+
+이다.
+
+전체 아키텍처
+[사용자]
+   ↓ 카카오톡 메세지
+
+[카카오톡 채널 / 알림톡 / 오픈빌더]
+   ↓ webhook
+
+[Node.js MCP Server]
+   ├─ Context 관리
+   ├─ Tool Router
+   ├─ Agent 실행
+   ├─ Memory 관리
+   ├─ AI 호출(OpenAI/Claude/Local)
+   └─ Action Executor
+
+   ↓
+
+[외부 시스템]
+   ├─ DB
+   ├─ 사내 API
+   ├─ 검색
+   ├─ 일정관리
+   ├─ 메일
+   ├─ Slack
+   └─ 금융 AML 시스템
+
+   ↓
+
+[응답 생성]
+   ↓
+
+카카오톡 회신
+여기서 MCP의 역할
+
+MCP(Model Context Protocol)는 쉽게 말하면:
+
+AI에게 "도구(tool)"를 표준 방식으로 제공하는 프로토콜
+
+이다.
+
+즉:
+
+AI:
+"사용자 일정 조회해"
+
+↓
+
+MCP:
+calendar.get_events 호출
+
+↓
+
+Node.js 서버:
+실제 API 실행
+
+↓
+
+결과 반환
+
+이 흐름을 만든다.
+
+네 구조에서 중요한 핵심
+
+네 경우는 사실상:
+
+카카오톡 = UI
+MCP Server = AI OS
+
+가 된다.
+
+이게 중요하다.
+
+추천 실무 구조
+1. 카카오톡 수신부
+
+카카오 i 오픈빌더 webhook 사용.
+
+추천:
+
+카카오톡 채널
+오픈빌더 스킬 서버
+Node.js Express
+
+구조:
+
+POST /kakao/webhook
+
+카카오가 여기로 메시지 던짐.
+
+2. Node.js MCP Server
+
+추천 스택:
+
+영역	기술
+Runtime	Node.js
+API	Express/Fastify
+AI SDK	OpenAI SDK
+MCP	MCP SDK
+Queue	BullMQ
+Memory	Redis
+Vector	Qdrant
+DB	PostgreSQL
+Auth	JWT/SSO
+Event	Kafka(optional)
+폴더 구조
+project/
+
+├── app/
+│   ├── routes/
+│   ├── agents/
+│   ├── tools/
+│   ├── memory/
+│   ├── workflows/
+│   └── prompts/
+│
+├── mcp/
+│   ├── server.js
+│   ├── tool-registry.js
+│   └── handlers/
+│
+├── infra/
+│   ├── redis/
+│   ├── kafka/
+│   └── db/
+│
+└── index.js
+MCP 서버 예시
+
+Node.js 기준.
+
+import express from "express";
+
+const app = express();
+app.use(express.json());
+
+const tools = {
+  get_weather: async ({ city }) => {
+    return `${city} 날씨 맑음`;
+  },
+
+  search_user: async ({ name }) => {
+    return {
+      name,
+      grade: "VIP"
+    };
+  }
+};
+
+app.post("/mcp", async (req, res) => {
+  const { tool, args } = req.body;
+
+  if (!tools[tool]) {
+    return res.status(404).json({
+      error: "tool not found"
+    });
+  }
+
+  const result = await tools[tool](args);
+
+  res.json({
+    result
+  });
+});
+
+app.listen(3000);
+카카오 webhook 예시
+app.post("/kakao/webhook", async (req, res) => {
+
+  const userMessage =
+    req.body.userRequest.utterance;
+
+  // AI 호출
+  const aiResult = await runAgent(userMessage);
+
+  res.json({
+    version: "2.0",
+    template: {
+      outputs: [
+        {
+          simpleText: {
+            text: aiResult
+          }
+        }
+      ]
+    }
+  });
+});
+진짜 중요한 부분 (핵심)
+
+여기서 많은 사람이:
+
+카톡 → GPT → 답변
+
+만 만든다.
+
+근데 네가 원하는 건 사실:
+
+카톡 → AI Agent System
+
+이다.
+
+차원이 다르다.
+
+그래서 필요한 계층
+1. Intent 분석
+
+예:
+
+"오늘 회의 일정 알려줘"
+
+↓
+
+{
+  "intent": "calendar.search"
+}
+2. Tool 선택
+
+AI가:
+
+calendar_tool 호출
+
+결정.
+
+3. MCP Tool 실행
+calendar.get_events
+
+실행.
+
+4. 결과 기반 응답 생성
+오늘 3시에 AML 회의 있습니다.
+MCP Tool 설계 예시
+일정 조회
+{
+  name: "calendar.get_events",
+  description: "사용자 일정 조회"
+}
+사내 직원 조회
+{
+  name: "employee.search"
+}
+AML 탐지 조회
+
+금융권 커리어 기준 이건 꽤 강력해질 수 있음.
+
+{
+  name: "aml.detect_case"
+}
+추천 AI 구조
+단순형
+카톡
+ → GPT-4.1
+ → MCP Tools
+실무형
+카톡
+ → Router Agent
+    ├─ 업무 Agent
+    ├─ 검색 Agent
+    ├─ 일정 Agent
+    ├─ AML Agent
+    └─ 보고서 Agent
+장기적으로는 이렇게 감
+Event Driven 구조
+카톡 메시지
+ → Kafka
+ → Agent Workers
+ → 결과 저장
+ → 응답
+메모리 구조도 중요
+
+사용자별:
+
+user_id
+conversation_id
+memory
+context
+tool_history
+
+저장.
+
+Redis 추천.
+
+실무적으로 가장 어려운 부분
+
+사실 AI가 아니다.
+
+어려운건:
+1. Context 관리
+
+대화 이어가기.
+
+2. Tool 안정성
+
+AI hallucination 방지.
+
+3. 권한 제어
+
+예:
+
+"직원 연봉 조회해줘"
+
+권한 없으면 차단.
+
+4. 비동기 작업
+
+예:
+
+보고서 생성해줘
+
+→ 30초 걸림.
+
+카톡은 timeout 존재.
+
+그래서:
+
+접수했습니다.
+완료 후 보내드릴게요.
+
+형태 필요.
+
+네 프로젝트의 현실적인 MVP
+
+추천 순서:
+
+1단계
+카톡 ↔ GPT 연결
+2단계
+MCP Tool 3개 연결
+일정
+메모
+검색
+3단계
+Memory 붙이기
+
+Redis.
+
+4단계
+멀티 Agent
+5단계
+Kafka + Worker
+추천 오픈소스
+MCP
+Model Context Protocol
+MCP TypeScript SDK
+Agent
+LangGraph
+Mastra
+Vector DB
+Qdrant
+네 구조를 한 줄로 요약하면
+카카오톡을 "AI 운영체제의 터미널"로 만드는 구조
+
+이다.
+
+그리고 이 구조는 단순 챗봇보다 훨씬 확장성이 크다.
+
+
+위의 답변내용을 md형식으로 아키텍처로 1개, workflow 로 1개, 그리고 내가 각 스텝별 진행해야되는 내용들 정리해서 1개 최종적으로 그려지는 AI MCP 를 강조해서 문서화해줘
+
+architecture.md
+# AI MCP KakaoTalk System Architecture
+
+## Overview
+
+본 시스템은 카카오톡을 AI Agent 운영 인터페이스로 사용하며,
+Node.js 기반 MCP(Model Context Protocol) 서버를 통해
+AI가 다양한 Tool과 내부 시스템을 제어하는 구조이다.
+
+---
+
+# High Level Architecture
+
+```text
+┌────────────────────┐
+│      User          │
+│   (KakaoTalk)      │
+└─────────┬──────────┘
+          │
+          ▼
+┌────────────────────┐
+│ Kakao Open Builder │
+│  / Channel Webhook │
+└─────────┬──────────┘
+          │ HTTP Webhook
+          ▼
+┌───────────────────────────────────┐
+│        Node.js MCP Server         │
+│                                   │
+│  ┌─────────────────────────────┐  │
+│  │      Intent Analyzer        │  │
+│  └────────────┬────────────────┘  │
+│               │                   │
+│               ▼                   │
+│  ┌─────────────────────────────┐  │
+│  │        Agent Router         │  │
+│  └────────────┬────────────────┘  │
+│               │                   │
+│    ┌──────────┼──────────┐        │
+│    ▼          ▼          ▼        │
+│ Calendar   AML Agent   Search     │
+│  Agent                  Agent     │
+│                                   │
+│  ┌─────────────────────────────┐  │
+│  │        MCP Tool Layer       │  │
+│  └────────────┬────────────────┘  │
+│               │                   │
+└───────────────┼───────────────────┘
+                │
+                ▼
+┌───────────────────────────────────┐
+│          External Systems         │
+│                                   │
+│ - PostgreSQL                      │
+│ - Redis                           │
+│ - Kafka                           │
+│ - Internal API                    │
+│ - Calendar                        │
+│ - Mail                            │
+│ - Search                          │
+│ - AML System                      │
+└───────────────────────────────────┘
+```
+
+---
+
+# Core Concept
+
+## KakaoTalk = UI
+
+카카오톡은 단순 메신저가 아니라
+AI 시스템과 연결되는 사용자 인터페이스 역할을 수행한다.
+
+---
+
+## MCP Server = AI Operating System
+
+MCP 서버는 다음 역할을 수행한다.
+
+- Context 관리
+- Tool 호출
+- Agent 실행
+- 권한 제어
+- Memory 저장
+- Workflow 실행
+- 외부 시스템 연동
+
+---
+
+# Recommended Stack
+
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js |
+| Framework | Express / Fastify |
+| AI SDK | OpenAI SDK |
+| MCP | MCP TypeScript SDK |
+| Queue | BullMQ |
+| Cache | Redis |
+| DB | PostgreSQL |
+| Vector DB | Qdrant |
+| Event Streaming | Kafka |
+| Auth | JWT / SSO |
+
+---
+
+# Directory Structure
+
+```text
+project/
+
+├── app/
+│   ├── agents/
+│   ├── workflows/
+│   ├── tools/
+│   ├── prompts/
+│   ├── routes/
+│   └── memory/
+│
+├── mcp/
+│   ├── server.js
+│   ├── tool-registry.js
+│   └── handlers/
+│
+├── infra/
+│   ├── redis/
+│   ├── kafka/
+│   └── db/
+│
+└── index.js
+```
+
+---
+
+# AI Agent Structure
+
+```text
+Router Agent
+   ├── Calendar Agent
+   ├── Search Agent
+   ├── AML Agent
+   ├── Report Agent
+   └── Workflow Agent
+```
+
+---
+
+# Memory Architecture
+
+```text
+user_id
+conversation_id
+context
+memory
+tool_history
+workflow_state
+```
+
+Redis 기반 세션 메모리 권장.
+
+---
+
+# Event Driven Expansion
+
+향후 확장 구조:
+
+```text
+Kakao Message
+   ↓
+Kafka
+   ↓
+Agent Workers
+   ↓
+Async Processing
+   ↓
+Kakao Response
+```
+
+---
+
+# Security Layer
+
+## Required
+
+- JWT 인증
+- SSO 연동
+- Tool Access Control
+- Role 기반 권한 관리
+- Audit Logging
+
+---
+
+# Long-Term Goal
+
+```text
+카카오톡 기반 AI Agent Operating System 구축
+```
+
+AI가 단순 응답이 아니라
+실제 업무를 수행하는 구조를 목표로 한다.
+
+workflow.md
+# AI MCP Workflow
+
+# Main Workflow
+
+```text
+User Message
+    ↓
+Kakao Webhook
+    ↓
+Intent Analysis
+    ↓
+Agent Routing
+    ↓
+Tool Selection
+    ↓
+MCP Tool Execution
+    ↓
+Memory Update
+    ↓
+Response Generation
+    ↓
+Kakao Reply
+```
+
+---
+
+# Detailed Workflow
+
+## 1. User Message Input
+
+사용자가 카카오톡으로 메시지 전송.
+
+예시:
+
+```text
+오늘 일정 알려줘
+```
+
+---
+
+## 2. Kakao Webhook
+
+카카오 오픈빌더가
+Node.js 서버의 webhook endpoint 호출.
+
+```http
+POST /kakao/webhook
+```
+
+---
+
+## 3. Intent Analysis
+
+AI가 사용자 의도를 분석.
+
+예시:
+
+```json
+{
+  "intent": "calendar.search"
+}
+```
+
+---
+
+## 4. Agent Routing
+
+Router Agent가
+적절한 Agent 선택.
+
+```text
+calendar.search
+    ↓
+Calendar Agent
+```
+
+---
+
+## 5. MCP Tool Selection
+
+AI가 필요한 Tool 결정.
+
+예시:
+
+```text
+calendar.get_events
+```
+
+---
+
+## 6. MCP Tool Execution
+
+Node.js MCP Server가
+실제 API 또는 내부 시스템 호출.
+
+```text
+Google Calendar API
+Internal API
+AML API
+Search API
+```
+
+---
+
+## 7. Memory Update
+
+사용자 context 저장.
+
+```text
+conversation history
+tool usage
+workflow state
+```
+
+Redis 저장.
+
+---
+
+## 8. Response Generation
+
+AI가 최종 응답 생성.
+
+예시:
+
+```text
+오늘 오후 3시에 AML 회의가 있습니다.
+```
+
+---
+
+## 9. Kakao Response
+
+카카오톡으로 응답 반환.
+
+---
+
+# Async Workflow
+
+긴 작업은 비동기 처리.
+
+## Example
+
+```text
+보고서 생성해줘
+```
+
+↓
+
+```text
+요청 접수되었습니다.
+완료 후 보내드리겠습니다.
+```
+
+↓
+
+Kafka Queue
+
+↓
+
+Worker Processing
+
+↓
+
+Result Response
+
+---
+
+# Multi-Agent Workflow
+
+```text
+Router Agent
+    ├── Search Agent
+    ├── AML Agent
+    ├── Report Agent
+    └── Workflow Agent
+```
+
+---
+
+# MCP Tool Flow
+
+```text
+AI
+ ↓
+MCP Tool Request
+ ↓
+Node.js Tool Handler
+ ↓
+External System
+ ↓
+Tool Result
+ ↓
+AI Response
+```
+
+---
+
+# Memory Flow
+
+```text
+User Message
+    ↓
+Conversation Context
+    ↓
+Redis Session Memory
+    ↓
+Long-term Vector Memory
+```
+
+---
+
+# Security Workflow
+
+```text
+User Request
+    ↓
+JWT Validation
+    ↓
+SSO Validation
+    ↓
+Role Check
+    ↓
+Tool Permission Check
+    ↓
+Execution
+```
+
+---
+
+# Final Goal
+
+```text
+Chatbot이 아니라
+AI 업무 수행 시스템 구축
+```
+
+roadmap.md
+# AI MCP Development Roadmap
+
+# Phase 1 — KakaoTalk Integration
+
+## Goal
+
+카카오톡 ↔ AI 연결
+
+---
+
+## Tasks
+
+### 1. Kakao Channel 생성
+
+- 카카오 비즈니스 계정 생성
+- 카카오 채널 생성
+- 오픈빌더 연결
+
+---
+
+### 2. Node.js Server 구축
+
+- Express 설치
+- Webhook API 생성
+
+```text
+POST /kakao/webhook
+```
+
+---
+
+### 3. AI API 연결
+
+- OpenAI API
+- Claude API
+- Local LLM(optional)
+
+---
+
+### 4. Basic Chat Response
+
+```text
+카톡 메시지 → AI 응답
+```
+
+완성.
+
+---
+
+# Phase 2 — MCP Server 구축
+
+## Goal
+
+AI가 Tool 사용 가능하게 만들기
+
+---
+
+## Tasks
+
+### 1. MCP SDK 연결
+
+- MCP TypeScript SDK
+- Tool Registry 구현
+
+---
+
+### 2. Tool 설계
+
+예시:
+
+```text
+calendar.get_events
+employee.search
+aml.detect_case
+search.web
+```
+
+---
+
+### 3. Tool Handler 구현
+
+```text
+Tool
+  ↓
+Internal API
+  ↓
+Result
+```
+
+---
+
+### 4. Agent Router 구현
+
+Intent 기반 Agent 분기.
+
+---
+
+# Phase 3 — Memory System
+
+## Goal
+
+대화 기억 및 context 유지
+
+---
+
+## Tasks
+
+### 1. Redis 연결
+
+세션 메모리 저장.
+
+---
+
+### 2. Conversation 저장
+
+```text
+user_id
+conversation_id
+messages
+tool_history
+```
+
+---
+
+### 3. Vector Memory 구축
+
+Qdrant 연결.
+
+---
+
+# Phase 4 — Multi-Agent System
+
+## Goal
+
+AI 역할 분리
+
+---
+
+## Tasks
+
+### 1. Router Agent
+
+Intent 분기 담당.
+
+---
+
+### 2. Specialized Agents
+
+- Calendar Agent
+- AML Agent
+- Search Agent
+- Report Agent
+
+---
+
+### 3. Workflow Agent
+
+복합 업무 처리.
+
+예시:
+
+```text
+메일 조회
+→ 요약
+→ 보고서 작성
+→ 전달
+```
+
+---
+
+# Phase 5 — Async Architecture
+
+## Goal
+
+대규모 처리 안정화
+
+---
+
+## Tasks
+
+### 1. Kafka 구축
+
+Event Streaming.
+
+---
+
+### 2. Worker 구축
+
+비동기 처리.
+
+---
+
+### 3. Queue 시스템
+
+BullMQ 연결.
+
+---
+
+### 4. Retry System
+
+실패 자동 복구.
+
+---
+
+# Phase 6 — Enterprise Architecture
+
+## Goal
+
+실무형 AI 업무 시스템 완성
+
+---
+
+## Tasks
+
+### 1. SSO 연동
+
+- JWT
+- OAuth2
+- 사내 인증
+
+---
+
+### 2. RBAC
+
+Role 기반 권한 제어.
+
+---
+
+### 3. Audit Logging
+
+모든 Tool 호출 기록.
+
+---
+
+### 4. Monitoring
+
+- Grafana
+- Prometheus
+
+---
+
+# Final AI MCP Vision
+
+```text
+KakaoTalk
+    ↓
+AI Agent Platform
+    ↓
+MCP Tool Ecosystem
+    ↓
+Enterprise Workflow Automation
+```
+
+---
+
+# Final Concept
+
+## 기존 챗봇
+
+```text
+질문 → 답변
+```
+
+---
+
+## AI MCP System
+
+```text
+질문
+ ↓
+판단
+ ↓
+Tool 실행
+ ↓
+업무 수행
+ ↓
+결과 반환
+```
+
+---
+
+# Final Target
+
+```text
+"카카오톡 기반 AI Operating System"
+```
+
+단순 응답형 챗봇이 아니라
+
+AI가 실제 업무를 수행하는 구조를 구축한다.
+
+
